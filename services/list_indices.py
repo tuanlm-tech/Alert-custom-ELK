@@ -1,15 +1,35 @@
 from connections.elasticsearch_connection import es
 
-indices = es.cat.indices(format="json")
+INDEX_NAME = "kiosk-log-ssh_login-2026.06.17"
 
-for idx in indices:
-    print(
-        f"""
-INDEX   : {idx['index']}
-HEALTH  : {idx['health']}
-STATUS  : {idx['status']}
-DOCS    : {idx['docs.count']}
-SIZE    : {idx['store.size']}
--------------------------------
-"""
+last_timestamp = None
+
+while True:
+    query = {"match_all": {}}
+
+    if last_timestamp:
+        query = {
+            "range": {
+                "@timestamp": {
+                    "gt": last_timestamp
+                }
+            }
+        }
+
+    response = es.search(
+        index=INDEX_NAME,
+        size=1000,
+        sort=[
+            {"@timestamp": "asc"}
+        ],
+        query=query
     )
+
+    hits = response["hits"]["hits"]
+
+    for hit in hits:
+        source = hit["_source"]
+
+        print(source.get("message"))
+
+        last_timestamp = source["@timestamp"]

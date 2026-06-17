@@ -1,6 +1,6 @@
 from connections.elasticsearch_connection import es
 
-INDEX_NAME = "kiosk-log-cisco_log-2026.06.05"
+INDEX_NAME = "kiosk-log-ssh_login-2026.06.15"
 
 response = es.search(
     index=INDEX_NAME,
@@ -10,8 +10,7 @@ response = es.search(
     }
 )
 
-for hit in response["hits"]["hits"]:
+doc = response["hits"]["hits"][0]["_source"]
 
-    print("ID:", hit["_id"])
-    print("SOURCE:", hit["_source"])
-    print("----------------------------")
+for field in doc.keys():
+    print(field)
