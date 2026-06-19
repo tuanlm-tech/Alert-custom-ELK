@@ -1,6 +1,6 @@
 from connections.elasticsearch_connection import es
 
-INDEX_NAME = "kiosk-log-ssh_login-2026.06.17"
+INDEX_NAME = "kiosk-log-ssh_login-2026.06.19"
 
 last_timestamp = None
 
