@@ -7,17 +7,29 @@ from datetime import datetime
 from connections.elasticsearch_connection import es
 from utils.email_service import send_email
 
-INDEX_NAME = "kiosk-log-ssh_login-2026.06.19"
 
-TO_EMAIL = "tuanlm@mksmart.com.vn"
+# =========================
+# CONFIG
+# =========================
 
-# Chống gửi email trùng trong 3 phút
+TO_EMAILS = [
+    "tuanlm@mksmart.com.vn",
+    "admin@mksmart.com.vn",
+    # "soc@mksmart.com.vn",
+]
+
 EMAIL_SUPPRESS_SECONDS = 180
+EMAIL_BATCH_SECONDS = 60
 
 last_timestamp = None
 
 # alert_key -> last_sent_time
 message_cache = {}
+
+# danh sách alert chờ gửi
+pending_alerts = []
+
+last_email_time = time.time()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -26,6 +38,17 @@ html_template = (
     / "templates"
     / "email_template.html"
 ).read_text(encoding="utf-8")
+
+
+# =========================
+# HELPER
+# =========================
+
+def get_index_name():
+    return (
+        "kiosk-log-ssh_login-"
+        + datetime.now().strftime("%Y.%m.%d")
+    )
 
 
 def build_alert_key(message: str) -> str:
@@ -55,7 +78,7 @@ def build_alert_key(message: str) -> str:
 
         return f"{hostname}|{username}|{src_ip}"
 
-    # fallback nếu parse lỗi
+    # fallback
     return re.sub(
         r"port\s+\d+",
         "port:*",
@@ -63,8 +86,76 @@ def build_alert_key(message: str) -> str:
     )
 
 
+def send_batch_email(alerts):
+    if not alerts:
+        return
+
+    description = "<br><br>".join(alerts)
+
+    html = html_template
+
+    html = html.replace(
+        "{{COMMAND}}",
+        "ssh"
+    )
+
+    html = html.replace(
+        "{{ACTION}}",
+        "login"
+    )
+
+    html = html.replace(
+        "{{TIME}}",
+        datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    )
+
+    html = html.replace(
+        "{{SEVERITY}}",
+        "HIGH"
+    )
+
+    html = html.replace(
+        "{{DESCRIPTION}}",
+        description
+    )
+
+    html = html.replace(
+        "{{KIBANA_URL}}",
+        "http://10.30.137.11"
+    )
+
+    success_count = 0
+
+    for email in TO_EMAILS:
+
+        success = send_email(
+            subject=f"[SIEM AUDIT] SSH LOGIN ({len(alerts)} Events)",
+            body=html,
+            to_email=email,
+            is_html=True
+        )
+
+        if success:
+            success_count += 1
+
+    print(
+        f"Batch email sent "
+        f"({len(alerts)} alerts, "
+        f"{success_count}/{len(TO_EMAILS)} recipients)"
+    )
+
+
+# =========================
+# MAIN LOOP
+# =========================
+
 while True:
+
     try:
+
+        INDEX_NAME = get_index_name()
 
         query = {"match_all": {}}
 
@@ -81,7 +172,9 @@ while True:
             index=INDEX_NAME,
             size=1000,
             sort=[
-                {"@timestamp": "asc"}
+                {
+                    "@timestamp": "asc"
+                }
             ],
             query=query
         )
@@ -90,7 +183,10 @@ while True:
 
         current_time = time.time()
 
-        # Xóa cache quá hạn
+        # =========================
+        # Xóa cache hết hạn
+        # =========================
+
         expired_keys = [
             key
             for key, ts in message_cache.items()
@@ -100,75 +196,69 @@ while True:
         for key in expired_keys:
             del message_cache[key]
 
+        # =========================
+        # Xử lý log mới
+        # =========================
+
         for hit in hits:
 
             source = hit["_source"]
 
-            message = source.get("message", "")
-            timestamp = source.get("@timestamp")
+            message = source.get(
+                "message",
+                ""
+            )
+
+            timestamp = source.get(
+                "@timestamp"
+            )
 
             last_timestamp = timestamp
 
-            alert_key = build_alert_key(message)
-
-            # Đã gửi email trong vòng 3 phút
-            if alert_key in message_cache:
-                continue
-
-            print(message)
-            print(f"ALERT_KEY: {alert_key}")
-
-            html = html_template
-
-            html = html.replace(
-                "{{COMMAND}}",
-                "ssh"
-            )
-
-            html = html.replace(
-                "{{ACTION}}",
-                "login"
-            )
-
-            html = html.replace(
-                "{{TIME}}",
-                datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-            )
-
-            html = html.replace(
-                "{{SEVERITY}}",
-                "HIGH"
-            )
-
-            html = html.replace(
-                "{{DESCRIPTION}}",
+            alert_key = build_alert_key(
                 message
             )
 
-            html = html.replace(
-                "{{KIBANA_URL}}",
-                "https://kibana.mk.com.vn"
+            # chống gửi trùng
+            if alert_key in message_cache:
+                continue
+
+            print(
+                f"[NEW ALERT] {alert_key}"
             )
 
-            success = send_email(
-                subject="[SIEM AUDIT] SSH LOGIN",
-                body=html,
-                to_email=TO_EMAIL,
-                is_html=True
+            pending_alerts.append(
+                f"{timestamp}<br>{message}"
             )
 
-            if success:
+            message_cache[
+                alert_key
+            ] = current_time
 
-                print(
-                    f"Email sent ({alert_key})"
-                )
+        # =========================
+        # Gửi email theo batch
+        # =========================
 
-                message_cache[alert_key] = current_time
+        if (
+            pending_alerts
+            and current_time - last_email_time
+            >= EMAIL_BATCH_SECONDS
+        ):
+
+            send_batch_email(
+                pending_alerts
+            )
+
+            pending_alerts.clear()
+
+            last_email_time = current_time
 
         time.sleep(0.2)
 
     except Exception as e:
-        print(f"Error: {e}")
+
+        print(
+            f"Error: {e}"
+        )
+
         time.sleep(1)

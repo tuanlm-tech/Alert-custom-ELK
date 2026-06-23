@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Elastic Dashboard</title>
+</head>
+<body>
+
+<h1>Elastic Dashboard</h1>
+
+<h2>Current Login User</h2>
+
+<p>
+    Username:
+    <b>{{ current_user.username }}</b>
+</p>
+
+<p>
+    Roles:
+    {{ current_user.roles }}
+</p>
+
+<hr>
+
+<a href="/users">Users</a>
+<br>
+<a href="/roles">Roles</a>
+
+</body>
+</html>
